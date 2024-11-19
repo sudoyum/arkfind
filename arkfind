@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 """
 This is a utility to recursively search for files by name in a filesystem,
 also looking inside archives to an arbitary depth.
@@ -9,29 +9,24 @@ procedure.
 """
 
 import argparse
-from collections import deque
-from contextlib import closing, contextmanager
-from cStringIO import StringIO
-from fnmatch import fnmatchcase
 import json
 import logging
-from os import walk
 import os.path
 import posixpath
 import signal
 import sys
 import tarfile
-from tarfile import TarFile
 import zipfile
-from zipfile import ZipFile
 import zlib
+from collections import deque
+from contextlib import closing, contextmanager
+from fnmatch import fnmatchcase
+from io import BytesIO
+from os import walk
+from tarfile import TarFile
+from zipfile import ZipFile
 
 import magic
-
-# Interrupt signal (Ctrl+C) handler
-def interrupt_handler(signum, stack_frame):
-    print "Interrupted"
-    sys.exit(1)
 
 # Help text for command-line invocation
 PROG_TEXT = (
@@ -42,32 +37,23 @@ PROG_TEXT = (
 # Leading text for results
 RESULT_INDENT = "  > "
 
-# What encoding should we use to interpret command line arguments? Who knows! If
-# we get bytes off the command line, it could be sys.stdin.encoding. Or hey,
-# maybe it's locale.getpreferredencoding()! Although if we're invoked from
-# another program, they could pick anything and we wouldn't know. So let's just
-# say it's this.
-CLI_ENCODING = 'utf8'
-
 # How many bytes to read to determine the type of file in an archive
-MAGIC_BYTES_N = 1024
+MAGIC_BYTES_N = 2048
 
 # Mime types for archives we can search inside
 TAR_MIME_TYPES = {
     'application/x-bzip2' : 'r:bz2',
     'application/x-gzip'  : 'r:gz',
-    'application/x-tar'   : 'r:'
+    'application/x-tar'   : 'r:',
+    'application/bzip2' : 'r:bz2',
+    'application/gzip'  : 'r:gz',
+    'application/tar'   : 'r:'
 }
 
 ZIP_MIME_TYPES = ('application/zip', )
 
-def d_cl(some_bytes):
-    """ Decode bytes coming in from the command-line. See snarky note for
-    CLI_ENCODING.
-    """
-    return some_bytes.decode(CLI_ENCODING)
 
-class Path(object):
+class Path:
     """ Depending on whether we're searching or presenting results, we'll need
     to access both the split and joined forms of filesystem/archive paths. This
     class does the conversion once and keeps both forms so we don't keep
@@ -107,7 +93,7 @@ def concat_paths(paths):
 # member that is iterated over to list ALL files contained within them. The
 # exact behaviour of this varies between them.
 
-class NamedNode(object):
+class NamedNode:
     """ Represents a file, whether a normal file or directory or one nested
     inside an archive. The file is denoted by a series of Path objects.
 
@@ -130,7 +116,7 @@ class NamedNode(object):
         self.contents = ()
 
 
-class DirectoryWalker(object):
+class DirectoryWalker:
     """ Recurses through a filesystem starting at a given directory, looking for
     files in the filesystem itself and any archives it encounters.
     """
@@ -159,10 +145,10 @@ class DirectoryWalker(object):
 
                 # Inspect it to see if it's an archive
                 try:
-                    mime_type = magic.from_file(fpath.joined.encode(sys.getfilesystemencoding()), mime=True)
+                    mime_type = magic.from_file(fpath.joined, mime=True)
                 except IOError as ex:
                     logging.warning(
-                        "I/O error on %s (%s)" % (concat_paths((fpath,)), ex.strerror)
+                        "I/O error on %s (%s)", concat_paths((fpath,)), ex
                     )
                     mime_type = None
 
@@ -193,7 +179,7 @@ class DirectoryWalker(object):
                 yield NamedNode.single(Path.os(os.path.join(dirpath, dname)))
 
 
-class ArchiveWalker(object):
+class ArchiveWalker:
     """ Recursively searches the given archive, listing the contents and
     inspecting any nested archives for more files. Note that unlike the
     DirectoryWalker, an ArchiveWalker will populate its results as soon as it is
@@ -254,7 +240,7 @@ class ArchiveWalker(object):
             self._populate()
         except IOError as ex:
             logging.warning(
-                "I/O error on %s (%s)" % (concat_paths(self.paths), ex.strerror)
+                "I/O error on %s (%s)" % (concat_paths(self.paths), ex.message)
             )
 
     def _populate(self):
@@ -344,7 +330,7 @@ class TarWalker(ArchiveWalker):
         return self.archive.getmembers()
 
     def member_path(self, member):
-        return Path.posix(member.name.decode(self.ENCODING))
+        return Path.posix(member.name)
 
     def extract(self, member):
         return self.archive.extractfile(member)
@@ -395,14 +381,14 @@ class ZipWalker(ArchiveWalker):
     def member_path(self, member):
         # Although it's not documented, ZIP file paths are always '/' separated,
         # and directories end in a '/'. So this works for both kinds of archive.
-        return Path.posix(member.filename.decode(self.ENCODING))
+        return Path.posix(member.filename)
 
     def extract(self, member):
         # Unfortunately, ZipFile extraction is not as seamless as it is for
         # TarFile objects. We need to read the file into memory and operate on
         # that buffer, otherwise the extracted file shares a file pointer with
         # the original archive.
-        return StringIO(self.archive.read(member))
+        return BytesIO(self.archive.read(member))
 
     def could_be_archive(self, member):
         # Files won't have a trailing '/'
@@ -415,7 +401,7 @@ class ZipWalker(ArchiveWalker):
 def MatchAll(_):
     return True
 
-class TextSearcher(object):
+class TextSearcher:
     """ Simple, non-wildcard search for text in a file name. Can be case-
     sensitive or case-insensitive.
     """
@@ -440,7 +426,7 @@ class TextSearcher(object):
         return found
 
 
-class GlobSearcher(object):
+class GlobSearcher:
     """ UNIX-like glob pattern matching search. Can be case-sensitive or
     case-insenitive.
     """
@@ -476,14 +462,14 @@ def verbose_reporter():
     # We don't actually need a context manager here, so just create the function
     # and yield it.
     def reporter(paths):
-        print paths[0].joined.encode(CLI_ENCODING)
+        print(paths[0].joined)
 
         if len(paths) > 1:
             indent_level = 0
             for path in paths[1:]:
                 leading = " "*indent_level*len(RESULT_INDENT)
                 res_string = "%s%s%s" % (leading, RESULT_INDENT, path.joined)
-                print res_string.encode(CLI_ENCODING)
+                print(res_string)
                 indent_level += 1
     yield reporter
 
@@ -495,7 +481,7 @@ def json_reporter():
     """
     contents = deque()
     def report_single_result(paths):
-        contents.append([p.joined.encode('utf8') for p in paths])
+        contents.append([p.joined for p in paths])
     yield report_single_result
     json.dump(list(contents), sys.stdout, ensure_ascii=False)
     sys.stdout.write('\n')
@@ -526,7 +512,7 @@ def archive_search(base_path, search_func, reporter):
     a sequence of Path objects and return a boolean if the path is a valid
     result.
     """
-    encoded_path = base_path.joined.encode(sys.getfilesystemencoding())
+    encoded_path = base_path.joined
     if os.path.isdir(encoded_path):
         base_path_kind = 'inode/directory'
     else:
@@ -578,11 +564,6 @@ def main(base_path, search_text=None, case_sensitive=False, glob=False, json=Fal
 
 
 if __name__ == '__main__':
-    # Exit cleanly on Ctrl+C
-    signal.signal(signal.SIGINT, interrupt_handler)
-
-    # Get the incoming CLI arguments into shape for the rest of the script by
-    # parsing and decoding them.
     parser = argparse.ArgumentParser(
         description=PROG_TEXT
     )
@@ -600,7 +581,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.search_text:
-        search_text = d_cl(args.search_text)
+        search_text = args.search_text
     else:
         search_text = None
 
@@ -616,7 +597,7 @@ if __name__ == '__main__':
     )
 
     main(
-        d_cl(args.search_path),
+        args.search_path,
         search_text,
         case_sensitive=args.ignore_case,
         glob=args.glob,
