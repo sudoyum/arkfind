@@ -18,12 +18,12 @@ Dependencies and installation
 -----------------------------
 
 Download the "arkfind" script. Make it executable to run it like ```./arkfind```
- or run it with ```python ./arkfind```.
+ or run it with ```python3 ./arkfind```.
 
 Dependencies:
 
-  * Python (>= 2.7)
-  * python-magic (>= 0.4.3) (installable via pip)
+  * Python (>= 3.9)
+  * python-magic (>= 0.4.27) (installable via pip)
 
 Examples
 --------
